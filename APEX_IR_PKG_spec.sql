@@ -1,4 +1,4 @@
-create or replace PACKAGE APEX_IR_PKG
+CREATE OR REPLACE PACKAGE APEX_IR_PKG
 IS
       ------------------------------------------------------------------------------------------------
    /* Parses the sql and checks for the existence of a display and/or
@@ -9,10 +9,10 @@ IS
       Valid values for:
       display value column: D, DISPLAY_VALUE
       return value column: R, RETURN_VALUE
- 
+
       These values are what apex would require you to provide when
       creating an lov.
- 
+
       The name for the display and return value columns are returned
       through the output variables.
    */
@@ -38,7 +38,7 @@ IS
    /* It is possible to search on the displayed value of entries. For example, when there is a 'STATUS'
       with value 'In Use', then you can apply a filter on STATUS which only searches for 'Use' -> LIKE '%Use%'
       An exact match is POSSIBLE, but not necessarily!
- 
+
       What has to happen:
       The filter condition which is applied on a column based on a LOV has to be applied to the
       DISPLAY_VALUEs of the LOV, NOT on the RETURN_VALUEs.
@@ -65,16 +65,16 @@ IS
       previous model within that filtered set. The standard form process in apex
       which provides record navigation does not offer navigation based off an IR
       either. It also has sorting limitations.
- 
+
       Wish to use ROWID? Then make sure you have ROWID ALIASED in your query!
       Since the ir query will be made into a subquery, and ROWID is a pseudocolumn,
       it has to be aliased if it is to be selected out of this subquery.
- 
+
       Substitution variables are NOT supported. If your query has been generated
       then there is a good chance it'll include #OWNER#. This procedure will
       fail because i have provided no support for replacing those strings.
       Simply alter your region source and remove those strings.
- 
+
       p_use_bvar1-4: specify TRUE when this bind variable has to be used
                      This is done so your bind var can have a NULL value
                      It is assumed that when you flag bindvar 3 as being
@@ -138,9 +138,10 @@ IS
       p_use_session_state  IN  BOOLEAN DEFAULT TRUE, -- true for using apex session state bind vars. If False p_binds+vals are to be filled.
       p_binds              IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables
       p_binds_val          IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables VALUES      
-      p_incl_order_by      IN  BOOLEAN DEFAULT TRUE, --whether to include the order by or not
-      p_debug              OUT VARCHAR2  -- Returns the final and adjusted executed query
+      p_incl_filters       IN  BOOLEAN DEFAULT TRUE, --whether to include applied filters or not      
+      p_incl_order_by      IN  BOOLEAN DEFAULT TRUE  --whether to include the order by or not
    )
    RETURN VARCHAR2;
    ------------------------------------------------------------------------------------------------
 END apex_ir_pkg;
+/
