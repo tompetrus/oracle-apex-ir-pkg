@@ -1,4 +1,5 @@
 CREATE OR REPLACE PACKAGE BODY APEX_IR_PKG
+
 IS
    pa_condition_type_filter         CONSTANT VARCHAR2(30) := 'Filter';
    pa_condition_type_search         CONSTANT VARCHAR2(30) := 'Search';
@@ -242,6 +243,140 @@ IS
       RETURN lv_condition;
    END get_ir_filter_lov_col;
    ------------------------------------------------------------------------------------------------
+   FUNCTION get_ir_report_id
+   (
+      p_app_id      IN NUMBER, 
+      p_page_id     IN NUMBER, 
+      p_app_user    IN VARCHAR2, 
+      p_session_id  IN NUMBER, 
+      p_report_id   IN NUMBER
+   )
+   RETURN NUMBER
+   IS
+      lv_report_id      NUMBER(20);
+      lv_pref           VARCHAR2(50);
+   BEGIN
+      apex_debug_message.log_message('-- GET_IR_REPORT_ID --');
+      -- How the report IDs work:
+      -- your base IR can be found in APEX_APPLICATION_PAGE_IR. Per page you'll find one IR here,
+      -- with an interactive_report_id (the base base IR).
+      -- In APEX_APPLICATION_PAGE_IR_RPT you can find the reports based off the IR in APEX_APPLICATION_PAGE_IR.
+      -- There'll be a report with the primary defaults, ie the report the developer has created.
+      -- The reports have an interactive_report_id identical to that of the base base IR.
+      -- report_id is a unique id per IR report.
+      -- When a user visits the page with the ir on it, a session-specific IR will be initialized for him = report.
+      -- This ir will initially take over the values of the primary default IR. Its interactive_report_id will again
+      -- be identical to that of the primary defaults report and base base IR. The report_id will refer to the report_id
+      -- of the report it is based on, initially the primary defaults then.
+      IF p_report_id IS NULL THEN
+         BEGIN
+            SELECT interactive_report_id
+              INTO lv_report_id
+              FROM apex_application_page_ir
+             WHERE application_id = p_app_id
+               AND page_id = p_page_id;
+
+            apex_debug_message.log_message('interactive report_id: '||lv_report_id);
+
+            --BUG: here a check should be included on app_user. There seems to be no pref for nobody (public page)
+            --unsure of how to get which report is active for nobody!?
+            lv_pref := apex_util.get_preference(p_preference => 'FSP_IR_'||p_app_id||'_P'||p_page_id||'_W'||lv_report_id, p_user => p_app_user);
+            lv_pref := substr(lv_pref, 1, instr(lv_pref, '_')-1);
+            apex_debug_message.log_message('base_report_id: '||lv_pref);
+
+            SELECT report_id
+              INTO lv_report_id
+              FROM apex_application_page_ir_rpt
+             WHERE application_id = p_app_id
+               AND page_id = p_page_id
+               AND base_report_id = lv_pref
+               AND session_id = p_session_id;
+         EXCEPTION
+            WHEN no_data_found THEN
+               apex_debug_message.log_message('no IR id could be found. Check input parameters. -> end');
+               RETURN NULL;
+         END;
+      ELSE
+         lv_report_id := p_report_id;
+      END IF;
+      apex_debug_message.log_message('-- GET_IR_REPORT_ID END --');
+      RETURN lv_report_id;
+   END;
+   ------------------------------------------------------------------------------------------------
+   PROCEDURE get_ir_details
+   (
+      p_app_id       IN NUMBER, 
+      p_page_id      IN NUMBER, 
+      p_report_id    IN NUMBER,
+      o_ir_bid       OUT NUMBER,
+      o_ir_sid       OUT NUMBER,
+      o_ir_sql       OUT VARCHAR2,
+      o_ir_sql_sort  OUT VARCHAR2,
+      o_ir_rpt_cols  OUT VARCHAR2
+   )
+   IS
+      lv_sql            VARCHAR2(32767);
+      lv_sql_sort       VARCHAR2(4000);
+      lv_ir_bid         NUMBER(20); -- this is the IR BASE ID, NOT a session specific IR ID!!
+      lv_ir_sid         NUMBER(20); -- this is IR SESSION ID, NOT the BASE ID
+      lv_rpt_cols       VARCHAR2(4000);
+   BEGIN
+      apex_debug_message.log_message('-- GET_IR_DETAILS --');
+      /*Return the report query and any addition sort from the Interactive Report*/
+      SELECT z.interactive_report_id,
+             x.report_id,
+             z.sql_query,
+             nvl2(x.sort_column_1, x.sort_column_1
+             || ' '
+             || x.sort_direction_1
+             || nvl2(x.sort_column_2, ', '
+             || x.sort_column_2
+             || ' '
+             || x.sort_direction_2, NULL)
+             || nvl2(x.sort_column_3, ', '
+             || x.sort_column_3
+             || ' '
+             || x.sort_direction_3, NULL)
+             || nvl2(x.sort_column_4, ', '
+             || x.sort_column_4
+             || ' '
+             || x.sort_direction_4, NULL)
+             || nvl2(x.sort_column_5, ', '
+             || x.sort_column_5
+             || ' '
+             || x.sort_direction_5, NULL)
+             || nvl2(x.sort_column_6, ', '
+             || x.sort_column_6
+             || ' '
+             || x.sort_direction_6, NULL)||', rownum ', ' rownum ') sql_sort,
+             x.report_columns
+        INTO lv_ir_bid,
+             lv_ir_sid,
+             lv_sql,
+             lv_sql_sort,
+             lv_rpt_cols
+        FROM /* The following view contains the report original report query*/
+             apex_application_page_ir z,
+             /*The following view provides any column sorting*/
+             apex_application_page_ir_rpt x
+       WHERE x.interactive_report_id = z.interactive_report_id
+         AND x.application_id = p_app_id
+         AND x.report_id = p_report_id
+         AND x.page_id = p_page_id;
+
+      apex_debug_message.log_message('IR base ID: '||lv_ir_bid);
+      apex_debug_message.log_message('IR session ID: '||lv_ir_sid);
+      apex_debug_message.log_message('IR sort: '||lv_sql_sort);
+      apex_debug_message.log_message('IR columns: '||lv_rpt_cols);
+      
+      o_ir_bid      := lv_ir_bid;
+      o_ir_sid      := lv_ir_sid;
+      o_ir_sql      := lv_sql;
+      o_ir_sql_sort := lv_sql_sort;
+      o_ir_rpt_cols := lv_rpt_cols;
+      apex_debug_message.log_message('-- GET_IR_DETAILS END -- ');
+   END;
+   ------------------------------------------------------------------------------------------------
    /*
    NEXT_PREV_VALUES:
    fetches the NEXT, PREVIOUS, TOP, BOTTOM, CURRENT and TOP values for the
@@ -302,8 +437,7 @@ IS
       p_prev               OUT VARCHAR2, -- previous value
       p_top                OUT VARCHAR2, -- top value: first record
       p_bot                OUT VARCHAR2, -- bottom value: last record
-      p_cur_tot            OUT VARCHAR2, -- current of total: '4 of 132'
-      p_debug              OUT VARCHAR2  -- Returns the final and adjusted executed query
+      p_cur_tot            OUT VARCHAR2  -- current of total: '4 of 132'
    )
    AS
       v_report_id       NUMBER(20);
@@ -332,267 +466,41 @@ IS
          apex_debug_message.log_message('app_id/session_id/column_id/value/page_id : one or more of the input parameters is empty -> end');
          RETURN;
       END IF;
-
-      apex_debug_message.log_message('p_app_id: '    ||p_app_id);
-      apex_debug_message.log_message('p_session_id: '||p_session_id);
-      apex_debug_message.log_message('p_column_id: ' ||p_column_id);
-      apex_debug_message.log_message('p_value: '     ||p_value);
-      apex_debug_message.log_message('p_page_id: '   ||p_page_id);
-      apex_debug_message.log_message('p_app_user: '   ||p_app_user);
-
-      -- How the report IDs work:
-      -- your base IR can be found in APEX_APPLICATION_PAGE_IR. Per page you'll find one IR here,
-      -- with an interactive_report_id (the base base IR).
-      -- In APEX_APPLICATION_PAGE_IR_RPT you can find the reports based off the IR in APEX_APPLICATION_PAGE_IR.
-      -- There'll be a report with the primary defaults, ie the report the developer has created.
-      -- The reports have an interactive_report_id identical to that of the base base IR.
-      -- report_id is a unique id per IR report.
-      -- When a user visits the page with the ir on it, a session-specific IR will be initialized for him = report.
-      -- This ir will initially take over the values of the primary default IR. Its interactive_report_id will again
-      -- be identical to that of the primary defaults report and base base IR. The report_id will refer to the report_id
-      -- of the report it is based on, initially the primary defaults then.
-      IF p_report_id IS NULL THEN
-         BEGIN
-            SELECT interactive_report_id
-              INTO v_report_id
-              FROM apex_application_page_ir
-             WHERE application_id = p_app_id
-               AND page_id = p_page_id;
-
-            apex_debug_message.log_message('interactive report_id: '||v_report_id);
-
-            lv_pref := apex_util.get_preference(p_preference => 'FSP_IR_'||p_app_id||'_P'||p_page_id||'_W'||v_report_id, p_user => p_app_user);
-            lv_pref := substr(lv_pref, 1, instr(lv_pref, '_')-1);
-            apex_debug_message.log_message(': '||lv_pref);
-
-            SELECT report_id
-              INTO v_report_id
-              FROM apex_application_page_ir_rpt
-             WHERE application_id = p_app_id
-               AND page_id = p_page_id
-               AND base_report_id = lv_pref
-               AND session_id = p_session_id;
-         EXCEPTION
-            WHEN no_data_found THEN
-               apex_debug_message.log_message('no IR id could be found. Check input parameters. -> end');
-               RETURN;
-         END;
-      ELSE
-         v_report_id := p_report_id;
-      END IF;
+      
+      v_report_id := get_ir_report_id(
+          p_app_id      => p_app_id,
+          p_page_id     => p_page_id,
+          p_app_user    => p_app_user,
+          p_session_id  => p_session_id,
+          p_report_id   => p_report_id
+      );
 
       apex_debug_message.log_message('report_id: '||v_report_id);
 
-      /*Return the report query and any addition sort from the Interactive Report*/
-      SELECT z.interactive_report_id,
-             x.report_id,
-             z.sql_query,
-             nvl2(x.sort_column_1, x.sort_column_1
-             || ' '
-             || x.sort_direction_1
-             || nvl2(x.sort_column_2, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_2, NULL)
-             || nvl2(x.sort_column_3, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_3, NULL)
-             || nvl2(x.sort_column_4, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_4, NULL)
-             || nvl2(x.sort_column_5, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_5, NULL)
-             || nvl2(x.sort_column_6, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_6, NULL)||', rownum ', ' rownum ') sql_sort,
-             x.report_columns
-        INTO lv_ir_bid,
-             lv_ir_sid,
-             lv_sql,
-             lv_sql_sort,
-             lv_rpt_cols
-        FROM /* The following view contains the report original report query*/
-             apex_application_page_ir z,
-             /*The following view provides any column sorting*/
-             apex_application_page_ir_rpt x
-       WHERE x.interactive_report_id = z.interactive_report_id
-         AND x.application_id = p_app_id
-         AND x.report_id = v_report_id
-         AND x.page_id = p_page_id;
-
-      apex_debug_message.log_message('IR base ID: '||lv_ir_bid);
-      apex_debug_message.log_message('IR session ID: '||lv_ir_sid);
-
-      /*FILTER TYPES ON COLUMNS ONLY IN THIS LOOP!
-        SEARCH type is on each column in the report!
-
-        Filters: each filter is AND
-        Search: each search is AND, but the expression on each column is an OR
-      */
-      apex_debug_message.log_message('* Processing Filters on Columns *');
-      FOR cc IN (SELECT c.condition_type,
-                        c.condition_column_name,
-                        c.condition_expression,
-                        c.condition_expression2,
-                        c.condition_operator,
-                        c.condition_sql,
-                        col.column_type,
-                        col.filter_lov_source,
-                        col.named_lov,
-                        col.rpt_lov
-                   FROM APEX_APPLICATION_PAGE_IR_COND c
-                   JOIN APEX_APPLICATION_PAGE_IR_COL col
-                     ON c.condition_column_name = col.column_alias
-                    AND c.interactive_report_id = col.interactive_report_id
-                  WHERE c.interactive_report_id = lv_ir_bid -- BASE REPORT ID
-                    AND c.report_id = lv_ir_sid -- SESSION REPORT ID
-                    AND c.condition_enabled = 'Yes'
-                 )
-      LOOP
-         -----------------------------------------------------
-         -- Only named lists are allowed for display types of
-         --          'Display as Text(based on LOV, escape special characters)
-         -- so, only those are being parsed.
-         -- Apex 4.1.0.00.32
-         -----------------------------------------------------
-         apex_debug_message.log_message('filter on column '||cc.condition_column_name);
-         IF cc.filter_lov_source = pa_lov_filter_named_exact
-         THEN
-            apex_debug_message.log_message('column is based on an LOV');
-
-            lv_condition := get_ir_filter_lov_col(p_app_id                => p_app_id,
-                                                  p_named_lov             => cc.named_lov,
-                                                  p_condition_col_name    => cc.condition_column_name,
-                                                  p_condition_sql         => cc.condition_sql,
-                                                  p_condition_operator    => cc.condition_operator,
-                                                  p_condition_expression1 => cc.condition_expression,
-                                                  p_condition_expression2 => cc.condition_expression2);
-         ELSIF cc.filter_lov_source = pa_lov_filter_default
-         THEN
-            apex_debug_message.log_message('regular column');
-            IF cc.condition_type = pa_condition_type_filter THEN
-               lv_condition := REPLACE(REPLACE(cc.condition_sql, '#APXWS_EXPR2#', ''''|| cc.condition_expression2|| ''''),
-                                       '#APXWS_EXPR#', CASE SUBSTR(cc.condition_operator, 1, 9)
-                                                       WHEN 'is in the' THEN cc.condition_expression
-                                                       ELSE ''''||cc.condition_expression||''''
-                                                       END);
-
-
-            ELSIF cc.condition_type = pa_condition_type_search THEN
-               apex_debug_message.log_message('column filter of SEARCH type (column contains)');
-               lv_condition := 'INSTR(UPPER("' || cc.condition_column_name || '"),UPPER(''' || cc.condition_expression ||'''))>0 ';
-            END IF;
-         END IF;
-         apex_debug_message.log_message('parsed condition: '||lv_condition);
-
-         lv_filters := lv_filters || 'AND ' || lv_condition || ' ';
-      END LOOP;
-      apex_debug_message.log_message('All column filters processed');
-      apex_debug_message.log_message('conditions aggregated: '||lv_filters);
-      apex_debug_message.log_message('* Finished processing column filters *');
-
-      /* Filters of the ROW type!
-      */
-      apex_debug_message.log_message('* Processing Filters on Rows *');
-      FOR cc IN (SELECT condition_sql
-                   FROM APEX_APPLICATION_PAGE_IR_COND
-                  WHERE interactive_report_id = lv_ir_bid -- BASE REPORT ID
-                    AND report_id = lv_ir_sid -- SESSION REPORT ID
-                    AND condition_type = pa_condition_type_filter
-                    AND condition_expr_type = 'ROW'
-                    AND condition_enabled = 'Yes'
-                 )
-      LOOP
-         lv_condition := get_ir_filter_lov_row(p_app_id        => p_app_id,
-                                               p_ir_bid        => lv_ir_bid,
-                                               p_condition_sql => cc.condition_sql);
-         lv_filters := lv_filters || 'AND ' || lv_condition || ' ';
-      END LOOP;
-
-      IF lv_filters IS NOT NULL THEN
-         lv_filters := ' where ' || LTRIM(lv_filters, 'AND');
-      END IF;
-
-      apex_debug_message.log_message('All row filters processed');
-      apex_debug_message.log_message('conditions aggregated: '||lv_filters);
-      apex_debug_message.log_message('* Finished processing row filters *');
-
-      --dbms_output.put_line('filters: '||lv_filters);
-
-      /*SEARCH TYPES ONLY IN THIS LOOP
-        For each Search condition a filter needs to be applied to each column in the query
-        date columns excluded
-        lv_condition: a condition on one column, part of a search (instr)
-        lv_search: the aggregate of the conditions on each column, for one search (instr or instr or instr...)
-        lv_searches: the aggregate of the all the search filters (and (instr or instr or ...) and (instr or instr or ...) ...
-        */
-      apex_debug_message.log_message('* Processing Search Conditions *');
-      FOR cond IN (SELECT c.condition_type,
-                          c.condition_column_name,
-                          c.condition_expression
-                     FROM APEX_APPLICATION_PAGE_IR_COND c
-                    WHERE c.interactive_report_id = lv_ir_bid -- THIS IS THE BASE REPORT ID
-                      AND c.report_id = lv_ir_sid
-                      AND c.condition_type = pa_condition_type_search
-                      AND c.condition_enabled = 'Yes')
-      LOOP
-         /*
-         date columns are excluded
-         only columns selected for display are searched through a search type condition
-         for these columns, take into account lov based columns
-         */
-         apex_debug_message.log_message('parsing: '||cond.condition_expression);
-
-         FOR c IN ( SELECT b.column_alias, b.column_type, b.filter_lov_source, b.named_lov
-                     FROM (SELECT REGEXP_SUBSTR (str, '[^:]+', 1, LEVEL) rpt_col
-                             FROM (SELECT lv_rpt_cols str
-                                     FROM DUAL)
-                          CONNECT BY LEVEL <= length (regexp_replace (str, '[^:]+'))  + 1
-                         ) a
-                    JOIN apex_application_page_ir_col b
-                      ON b.interactive_report_id = lv_ir_bid -- THIS IS THE BASE REPORT ID
-                     AND a.rpt_col = b.column_alias
-                   WHERE column_type != 'DATE')
-         LOOP
-            apex_debug_message.log_message('column '||c.column_alias);
-            IF c.filter_lov_source = pa_lov_filter_named_exact
-            THEN
-               apex_debug_message.log_message('column is based on an LOV');
-               lv_condition := get_ir_filter_lov_col(p_app_id                => p_app_id,
-                                                     p_named_lov             => c.named_lov,
-                                                     p_condition_col_name    => c.column_alias,
-                                                     p_condition_sql         => 'INSTR(UPPER("' || c.column_alias || '"),UPPER(''' || cond.condition_expression ||'''))>0',
-                                                     p_condition_operator    => NULL,
-                                                     p_condition_expression1 => cond.condition_expression,
-                                                     p_condition_expression2 => NULL);
-            ELSIF c.filter_lov_source = pa_lov_filter_default
-            THEN
-               apex_debug_message.log_message('regular column');
-               lv_condition := 'INSTR(UPPER("' || c.column_alias || '"),UPPER(''' || cond.condition_expression ||'''))>0';
-            END IF;
-
-            --aggregate the conditions
-            lv_search := lv_search || 'OR ' || lv_condition || ' ';
-         END LOOP;
-         apex_debug_message.log_message('aggregated search: '||lv_search);
-
-         lv_search := LTRIM(lv_search, 'OR');
-         lv_searches := lv_searches||'AND ('||lv_search || ') ';
-      END LOOP;
-
-      IF lv_searches IS NOT NULL THEN
-         lv_searches := ' where ' || LTRIM(lv_searches, 'AND');
-      END IF;
-
-      apex_debug_message.log_message('All searches parsed');
-      apex_debug_message.log_message('searches aggregated: '||lv_searches);
-      apex_debug_message.log_message('* Finishes processing Search conditions');
-      --dbms_output.put_line('searches: ' || lv_searches);
+      get_ir_details(
+          p_app_id       => p_app_id,
+          p_page_id      => p_page_id,
+          p_report_id    => v_report_id,
+          o_ir_bid       => lv_ir_bid,
+          o_ir_sid       => lv_ir_sid,
+          o_ir_sql       => lv_sql,
+          o_ir_sql_sort  => lv_sql_sort,
+          o_ir_rpt_cols  => lv_rpt_cols
+      ); 
+      
+      lv_sql := get_ir_sql(
+          p_app_id             => p_app_id,
+          p_session_id         => p_session_id,
+          p_page_id            => p_page_id,
+          p_report_id          => v_report_id,
+          p_app_user           => p_app_user,
+          p_use_session_state  => p_use_session_state,
+          p_binds              => p_binds,
+          p_binds_val          => p_binds_val,
+          p_all_columns        => TRUE,
+          p_incl_filters       => TRUE,
+          p_incl_order_by      => FALSE
+      );
 
       -- combine the filters and searches into the final sql
       lv_combined :=
@@ -605,33 +513,10 @@ IS
                                                         ' RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) bot
                                   ,       count (' || p_column_id ||') over (order by ' || lv_sql_sort || ') cur
                                   ,       count (' || p_column_id ||') over () tot
-                             from (select *
-                                     from (' || lv_sql || ')'||lv_searches||')' ||lv_filters ||
-                        ')
+                             from (' || lv_sql || '))
                    where ' || p_column_id || ' = ' || p_value;
-
-      -- get the bind variables
-      apex_debug_message.log_message('Process bind variables');
-      IF p_use_session_state THEN
-         dbms_output.put_line('No binds as input, collecting binds from sql and populate through apex session state');
-         lv_binds := wwv_flow_utilities.get_binds(lv_combined);
-
-         FOR i IN 1..lv_binds.COUNT
-         LOOP
-            dbms_output.put_line('bind var: '||lv_binds(i)||' replaced by '||v(LTRIM(UPPER(lv_binds(i)), ':')));
-            lv_combined := regexp_replace(lv_combined, UPPER(lv_binds(i)), NVL(v(LTRIM(UPPER(lv_binds(i)), ':')), 'NULL'), 1, 0, 'i');
-         END LOOP;
-      ELSE
-         dbms_output.put_line('Binds have been given as input, populate through input values');
-         FOR i IN 1..p_binds.COUNT
-         LOOP
-            dbms_output.put_line('bind var: :'||LTRIM(p_binds(i), ':')||' replaced by '||p_binds_val(i));
-            lv_combined := regexp_replace(lv_combined, ':' || UPPER(LTRIM(p_binds(i), ':')), NVL(p_binds_val(i), 'NULL'), 1, 0, 'i');
-         END LOOP;
-      END IF;
-
-      apex_debug_message.log_message('The combined statement: '||lv_combined);
-      p_debug := lv_combined;
+      
+      apex_debug_message.log_message('Combined SQL: '||lv_combined);
 
       EXECUTE IMMEDIATE lv_combined
                    INTO p_prev,
@@ -657,7 +542,7 @@ IS
       apex_debug_message.log_message('bot: '     ||p_bot);
       apex_debug_message.log_message('current of total: '||p_cur_tot);
 
-      apex_debug_message.log_message('-- GET_NAVIGATION_VALUES -- ');
+      apex_debug_message.log_message('-- GET_NAVIGATION_VALUES END -- ');
    END get_navigation_values;
    ------------------------------------------------------------------------------------------------
    FUNCTION get_column_ac_values
@@ -668,6 +553,7 @@ IS
       p_value              IN  VARCHAR2, -- the current search value for p_column_id IF NULL THEN ALL
       p_page_id            IN  NUMBER,   -- Page number of the interactive report
       p_report_id          IN  NUMBER,   -- id of the selected IR, this can be null
+      p_app_user           IN  VARCHAR2, -- app user (APP_USER)
       p_use_session_state  IN  BOOLEAN DEFAULT TRUE, -- true for using apex session state bind vars. If False p_binds+vals are to be filled.
       p_binds              IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables
       p_binds_val          IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables VALUES
@@ -676,19 +562,9 @@ IS
    )
    RETURN CLOB
    IS
-      v_report_id       NUMBER(20);
-      lv_sql            VARCHAR2(32767);
-      lv_sql_sort       VARCHAR2(4000);
       lv_ir_bid         NUMBER(20); -- this is the IR BASE ID, NOT a session specific IR ID!!
-      lv_ir_sid         NUMBER(20); -- this is IR SESSION ID, NOT the BASE ID
-      lv_rpt_cols       VARCHAR2(4000);
-      lv_condition      VARCHAR2(4000);
-      lv_filters        VARCHAR2(8000);
-      lv_search         VARCHAR2(4000);
-      lv_searches       VARCHAR2(8000);
-      lv_conditions     VARCHAR2(16000);
+      lv_sql            VARCHAR2(32767);     
       lv_combined       VARCHAR2(32767);
-      lv_binds          DBMS_SQL.VARCHAR2_TABLE;
       lv_results        CLOB;
       lv_result         VARCHAR2(1000);
       TYPE lt_IR        IS REF CURSOR;
@@ -704,279 +580,28 @@ IS
          RETURN NULL;
       END IF;
 
-      --dbms_output.put_line('-- GET_COLUMN_AC_VALUES -- ');
-      --dbms_output.put_line('p_app_id: '    ||p_app_id);
-      --dbms_output.put_line('p_session_id: '||p_session_id);
-      --dbms_output.put_line('p_column_id: ' ||p_column_id);
-      --dbms_output.put_line('p_value: '     ||p_value);
-      --dbms_output.put_line('p_page_id: '   ||p_page_id);
-      --dbms_output.put_line('p_report_id: ' ||p_report_id);
-
-      -- How the report IDs work:
-      -- your base IR can be found in APEX_APPLICATION_PAGE_IR. Per page you'll find one IR here,
-      -- with an interactive_report_id (the base base IR).
-      -- In APEX_APPLICATION_PAGE_IR_RPT you can find the reports based off the IR in APEX_APPLICATION_PAGE_IR.
-      -- There'll be a report with the primary defaults, ie the report the developer has created.
-      -- The reports have an interactive_report_id identical to that of the base base IR.
-      -- report_id is a unique id per IR report.
-      -- When a user visits the page with the ir on it, a session-specific IR will be initialized for him = report.
-      -- This ir will initially take over the values of the primary default IR. Its interactive_report_id will again
-      -- be identical to that of the primary defaults report and base base IR. The report_id will refer to the report_id
-      -- of the report it is based on, initially the primary defaults then.
-      -- report_id can't be easily found when you call this procedure from plsql. In an ajax call it isn't a lot of trouble.
-      -- In apex 4.1 there is still the limitation of one IR per page, so i'll assume this here. If there ever comes the
-      -- option of multiple IRs per page, i assume there will be an easier access to them.
-      -- Here the report_id is attempted at being fetched of the user initialized report. If it isn't found, then the
-      -- report_id is retrieved for the primary default report.
-      IF p_report_id IS NULL
-      THEN
-         BEGIN
-            SELECT report_id
-              INTO v_report_id
-              FROM apex_application_page_ir_rpt
-             WHERE application_id = p_app_id
-               AND page_id = p_page_id
-               AND session_id = p_session_id
-               AND ROWNUM = 1; --futureproof?
-            EXCEPTION WHEN NO_DATA_FOUND THEN
-               -- This can be null if the user has not been to the IR yet. For example when you offer a link
-               -- to the detail page from a page other than the IR page. This way the user won't have been
-               -- to the ir yet, and it will not have initialized yet. In this case, the default settings should
-               -- be used. Which makes sense: on the user's first visit the ir will initialize to the default
-               -- settings anyway.
-               dbms_output.put_line('No user defined report, using Primary Defaults.');
-               SELECT report_id
-                 INTO v_report_id
-                 FROM apex_application_page_ir_rpt
-                WHERE application_id = p_app_id
-                  AND page_id = p_page_id
-                  AND report_type = 'PRIMARY_DEFAULT';
-                  -- this can fail aswell when no default have ever been made?
-         END;
-      ELSE
-         SELECT report_id
-           INTO v_report_id
-           FROM apex_application_page_ir_rpt
-          WHERE application_id = p_app_id
-            AND page_id = p_page_id
-            AND session_id = p_session_id
-            AND base_report_id = p_report_id;
-      END IF;
-
-      --dbms_output.put_line('report_id: '||v_report_id);
-
-      /*Return the report query and any addition sort from the Interactive Report*/
-      SELECT z.interactive_report_id,
-             x.report_id,
-             z.sql_query,
-             nvl2(x.sort_column_1, x.sort_column_1
-             || ' '
-             || x.sort_direction_1
-             || nvl2(x.sort_column_2, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_2, NULL)
-             || nvl2(x.sort_column_3, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_3, NULL)
-             || nvl2(x.sort_column_4, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_4, NULL)
-             || nvl2(x.sort_column_5, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_5, NULL)
-             || nvl2(x.sort_column_6, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_6, NULL)||', rownum ', ' rownum ') sql_sort,
-             x.report_columns
-        INTO lv_ir_bid,
-             lv_ir_sid,
-             lv_sql,
-             lv_sql_sort,
-             lv_rpt_cols
-        FROM /* The following view contains the report original report query*/
-             apex_application_page_ir z,
-             /*The following view provides any column sorting*/
-             apex_application_page_ir_rpt x
-       WHERE x.interactive_report_id = z.interactive_report_id
-         AND x.application_id = p_app_id
-         AND x.report_id = v_report_id
-         AND x.page_id = p_page_id;
-
-      --dbms_output.put_line('IR base ID: '||lv_ir_bid);
-      --dbms_output.put_line('IR session ID: '||lv_ir_sid);
-
-      IF p_filter_behaviour = 'FILTER' THEN
-        /*FILTER TYPES ON COLUMNS ONLY IN THIS LOOP!
-          SEARCH type is on each column in the report!
-
-          Filters: each filter is AND
-          Search: each search is AND, but the expression on each column is an OR
-        */
-        --dbms_output.put_line('* Processing Filters on Columns *');
-        FOR cc IN (SELECT c.condition_type,
-                          c.condition_column_name,
-                          c.condition_expression,
-                          c.condition_expression2,
-                          c.condition_operator,
-                          c.condition_sql,
-                          col.column_type,
-                          col.filter_lov_source,
-                          col.named_lov,
-                          col.rpt_lov
-                     FROM APEX_APPLICATION_PAGE_IR_COND c
-                     JOIN APEX_APPLICATION_PAGE_IR_COL col
-                       ON c.condition_column_name = col.column_alias
-                      AND c.interactive_report_id = col.interactive_report_id
-                    WHERE c.interactive_report_id = lv_ir_bid -- BASE REPORT ID
-                      AND c.report_id = lv_ir_sid -- SESSION REPORT ID
-                      AND c.condition_enabled = 'Yes'
-                   )
-        LOOP
-           -----------------------------------------------------
-           -- Only named lists are allowed for display types of
-           --          'Display as Text(based on LOV, escape special characters)
-           -- so, only those are being parsed.
-           -- Apex 4.1.0.00.32
-           -----------------------------------------------------
-           --dbms_output.put_line('filter on column '||cc.condition_column_name);
-           IF cc.filter_lov_source = pa_lov_filter_named_exact
-           THEN
-              --dbms_output.put_line('column is based on an LOV');
-
-              lv_condition := get_ir_filter_lov_col(p_app_id                => p_app_id,
-                                                    p_named_lov             => cc.named_lov,
-                                                    p_condition_col_name    => cc.condition_column_name,
-                                                    p_condition_sql         => cc.condition_sql,
-                                                    p_condition_operator    => cc.condition_operator,
-                                                    p_condition_expression1 => cc.condition_expression,
-                                                    p_condition_expression2 => cc.condition_expression2);
-           ELSIF cc.filter_lov_source = pa_lov_filter_default
-           THEN
-              --dbms_output.put_line('regular column');
-              IF cc.condition_type = pa_condition_type_filter THEN
-                 lv_condition := REPLACE(REPLACE(cc.condition_sql, '#APXWS_EXPR2#', ''''|| cc.condition_expression2|| ''''),
-                                         '#APXWS_EXPR#', CASE SUBSTR(cc.condition_operator, 1, 9)
-                                                         WHEN 'is in the' THEN cc.condition_expression
-                                                         ELSE ''''||cc.condition_expression||''''
-                                                         END);
-
-
-              ELSIF cc.condition_type = pa_condition_type_search THEN
-                 --dbms_output.put_line('column filter of SEARCH type (column contains)');
-                 lv_condition := 'INSTR(UPPER("' || cc.condition_column_name || '"),UPPER(''' || cc.condition_expression ||'''))>0 ';
-              END IF;
-           END IF;
-           --dbms_output.put_line('parsed condition: '||lv_condition);
-
-           lv_filters := lv_filters || 'AND ' || lv_condition || ' ';
-        END LOOP;
-        --dbms_output.put_line('All column filters processed');
-        --dbms_output.put_line('conditions aggregated: '||lv_filters);
-        --dbms_output.put_line('* Finished processing column filters *');
-
-        /* Filters of the ROW type!
-        */
-        --dbms_output.put_line('* Processing Filters on Rows *');
-        FOR cc IN (SELECT condition_sql
-                     FROM APEX_APPLICATION_PAGE_IR_COND
-                    WHERE interactive_report_id = lv_ir_bid -- BASE REPORT ID
-                      AND report_id = lv_ir_sid -- SESSION REPORT ID
-                      AND condition_type = pa_condition_type_filter
-                      AND condition_expr_type = 'ROW'
-                      AND condition_enabled = 'Yes'
-                   )
-        LOOP
-           lv_condition := get_ir_filter_lov_row(p_app_id        => p_app_id,
-                                                 p_ir_bid        => lv_ir_bid,
-                                                 p_condition_sql => cc.condition_sql);
-           lv_filters := lv_filters || 'AND ' || lv_condition || ' ';
-        END LOOP;
-
-        IF lv_filters IS NOT NULL THEN
-           lv_filters := ' where ' || LTRIM(lv_filters, 'AND');
-        END IF;
-
-        --dbms_output.put_line('All row filters processed');
-        --dbms_output.put_line('conditions aggregated: '||lv_filters);
-        --dbms_output.put_line('* Finished processing row filters *');
-
-        --dbms_output.put_line('filters: '||lv_filters);
-
-        /*SEARCH TYPES ONLY IN THIS LOOP
-          For each Search condition a filter needs to be applied to each column in the query
-          date columns excluded
-          lv_condition: a condition on one column, part of a search (instr)
-          lv_search: the aggregate of the conditions on each column, for one search (instr or instr or instr...)
-          lv_searches: the aggregate of the all the search filters (and (instr or instr or ...) and (instr or instr or ...) ...
-          */
-        --dbms_output.put_line('* Processing Search Conditions *');
-        FOR cond IN (SELECT c.condition_type,
-                            c.condition_column_name,
-                            c.condition_expression
-                       FROM APEX_APPLICATION_PAGE_IR_COND c
-                      WHERE c.interactive_report_id = lv_ir_bid -- THIS IS THE BASE REPORT ID
-                        AND c.report_id = lv_ir_sid
-                        AND c.condition_type = pa_condition_type_search
-                        AND c.condition_enabled = 'Yes')
-        LOOP
-           /*
-           date columns are excluded
-           only columns selected for display are searched through a search type condition
-           for these columns, take into account lov based columns
-           */
-           --dbms_output.put_line('parsing: '||cond.condition_expression);
-
-           FOR c IN ( SELECT b.column_alias, b.column_type, b.filter_lov_source, b.named_lov
-                       FROM (SELECT REGEXP_SUBSTR (str, '[^:]+', 1, LEVEL) rpt_col
-                               FROM (SELECT lv_rpt_cols str
-                                       FROM DUAL)
-                            CONNECT BY LEVEL <= length (regexp_replace (str, '[^:]+'))  + 1
-                           ) a
-                      JOIN apex_application_page_ir_col b
-                        ON b.interactive_report_id = lv_ir_bid -- THIS IS THE BASE REPORT ID
-                       AND a.rpt_col = b.column_alias
-                     WHERE column_type != 'DATE')
-           LOOP
-              --dbms_output.put_line('column '||c.column_alias);
-              IF c.filter_lov_source = pa_lov_filter_named_exact
-              THEN
-                 --dbms_output.put_line('column is based on an LOV');
-                 lv_condition := get_ir_filter_lov_col(p_app_id                => p_app_id,
-                                                       p_named_lov             => c.named_lov,
-                                                       p_condition_col_name    => c.column_alias,
-                                                       p_condition_sql         => 'INSTR(UPPER("' || c.column_alias || '"),UPPER(''' || cond.condition_expression ||'''))>0',
-                                                       p_condition_operator    => NULL,
-                                                       p_condition_expression1 => cond.condition_expression,
-                                                       p_condition_expression2 => NULL);
-              ELSIF c.filter_lov_source = pa_lov_filter_default
-              THEN
-                 --dbms_output.put_line('regular column');
-                 lv_condition := 'INSTR(UPPER("' || c.column_alias || '"),UPPER(''' || cond.condition_expression ||'''))>0';
-              END IF;
-
-              --aggregate the conditions
-              lv_search := lv_search || 'OR ' || lv_condition || ' ';
-           END LOOP;
-           --dbms_output.put_line('aggregated search: '||lv_search);
-
-           lv_search := LTRIM(lv_search, 'OR');
-           lv_searches := lv_searches||'AND ('||lv_search || ') ';
-        END LOOP;
-
-        IF lv_searches IS NOT NULL THEN
-           lv_searches := ' where ' || LTRIM(lv_searches, 'AND');
-        END IF;
-
-        --dbms_output.put_line('All searches parsed');
-        --dbms_output.put_line('searches aggregated: '||lv_searches);
-        --dbms_output.put_line('* Finished processing Search conditions');
-        --dbms_output.put_line('searches: ' || lv_searches);
-      END IF;
+      lv_sql := get_ir_sql(
+          p_app_id             => p_app_id,
+          p_session_id         => p_session_id,
+          p_page_id            => p_page_id,
+          p_report_id          => p_report_id,
+          p_app_user           => p_app_user,
+          p_use_session_state  => p_use_session_state,
+          p_binds              => p_binds,
+          p_binds_val          => p_binds_val,
+          p_all_columns        => FALSE,
+          p_incl_filters       => TRUE,
+          p_incl_order_by      => FALSE
+      );
+      
+      -- this select wont fail nor does it need to be session specific
+      -- columns are those derived from the base ir, and their details 
+      -- are not session specific
+      SELECT interactive_report_id
+        INTO lv_ir_bid
+        FROM apex_application_page_ir
+       WHERE application_id = p_app_id
+         AND page_id = p_page_id;
 
       IF is_column_lov_based(p_app_id, lv_ir_bid, p_column_id) THEN
          lv_column_slct := get_ir_filter_lov_row(p_app_id, lv_ir_bid, '"'||p_column_id||'"');
@@ -989,8 +614,7 @@ IS
       lv_combined :=
                  'select ''"''||sys.htf.escape_sc(REPLACE(REPLACE('|| lv_column_slct ||',''"'',''''), CHR(13)||CHR(10), ''''))||''"''' ||
                  '  from ( select distinct ' ||p_column_id ||
-                 '           from (select *' ||
-                 '                   from (' || lv_sql || ')'||lv_searches||')' ||lv_filters ||
+                 '           from ('||lv_sql||')'||
                  '          order by 1)'||
                  '  where '||CASE WHEN p_value IS NULL THEN '' ELSE
                                CASE p_search_behaviour
@@ -1002,27 +626,9 @@ IS
                             END||
                  ' rownum < 500';
 
-      -- get the bind variables
-      --dbms_output.put_line('Process bind variables');
-      IF p_use_session_state THEN
-         --dbms_output.put_line('No binds as input, collecting binds from sql and populate through apex session state');
-         lv_binds := wwv_flow_utilities.get_binds(lv_combined);
-
-         FOR i IN 1..lv_binds.COUNT
-         LOOP
-            --dbms_output.put_line('bind var: '||lv_binds(i)||' replaced by '||v(LTRIM(UPPER(lv_binds(i)), ':')));
-            lv_combined := regexp_replace(lv_combined, UPPER(lv_binds(i)), ''''||v(LTRIM(UPPER(lv_binds(i)), ':'))||'''', 1, 0, 'i');
-         END LOOP;
-      ELSE
-         --dbms_output.put_line('Binds have been given as input, populate through input values');
-         FOR i IN 1..p_binds.COUNT
-         LOOP
-            --dbms_output.put_line('bind var: :'||LTRIM(p_binds(i), ':')||' replaced by '||p_binds_val(i));
-            lv_combined := regexp_replace(lv_combined, ':' || UPPER(LTRIM(p_binds(i), ':')), ''''||p_binds_val(i)||'''', 1, 0, 'i');
-         END LOOP;
-      END IF;
-
-      --dbms_output.put_line('The combined statement: '||lv_combined);
+      -- IT MAY BE NECESSARY TO REPLACE BINDS IN THE TOTAL SELECT!
+      -- However, it seems very unlikely. The base SQL will be handled, and the
+      -- only place this may occur is in an LOV query for the filtered column
 
       OPEN lv_ir_cursor FOR lv_combined;
       LOOP
@@ -1103,6 +709,7 @@ IS
       p_use_session_state  IN  BOOLEAN DEFAULT TRUE, -- true for using apex session state bind vars. If False p_binds+vals are to be filled.
       p_binds              IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables
       p_binds_val          IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables VALUES
+      p_all_columns        IN  BOOLEAN DEFAULT FALSE, -- select * from ir sql or only selected columns
       p_incl_filters       IN  BOOLEAN DEFAULT TRUE, --whether to include applied filters or not
       p_incl_order_by      IN  BOOLEAN DEFAULT TRUE  --whether to include the order by or not
    )
@@ -1140,94 +747,26 @@ IS
          RETURN NULL;
       END IF;
 
-      -- How the report IDs work:
-      -- your base IR can be found in APEX_APPLICATION_PAGE_IR. Per page you'll find one IR here,
-      -- with an interactive_report_id (the base base IR).
-      -- In APEX_APPLICATION_PAGE_IR_RPT you can find the reports based off the IR in APEX_APPLICATION_PAGE_IR.
-      -- There'll be a report with the primary defaults, ie the report the developer has created.
-      -- The reports have an interactive_report_id identical to that of the base base IR.
-      -- report_id is a unique id per IR report.
-      -- When a user visits the page with the ir on it, a session-specific IR will be initialized for him = report.
-      -- This ir will initially take over the values of the primary default IR. Its interactive_report_id will again
-      -- be identical to that of the primary defaults report and base base IR. The report_id will refer to the report_id
-      -- of the report it is based on, initially the primary defaults then.
-      IF p_report_id IS NULL THEN
-         BEGIN
-            SELECT interactive_report_id
-              INTO v_report_id
-              FROM apex_application_page_ir
-             WHERE application_id = p_app_id
-               AND page_id = p_page_id;
-
-            apex_debug_message.log_message('interactive report_id: '||v_report_id);
-
-            --BUG: here a check should be included on app_user. There seems to be no pref for nobody (public page)
-            lv_pref := apex_util.get_preference(p_preference => 'FSP_IR_'||p_app_id||'_P'||p_page_id||'_W'||v_report_id, p_user => p_app_user);
-            lv_pref := substr(lv_pref, 1, instr(lv_pref, '_')-1);
-            apex_debug_message.log_message('base_report_id: '||lv_pref);
-
-            SELECT report_id
-              INTO v_report_id
-              FROM apex_application_page_ir_rpt
-             WHERE application_id = p_app_id
-               AND page_id = p_page_id
-               AND base_report_id = lv_pref
-               AND session_id = p_session_id;
-         EXCEPTION
-            WHEN no_data_found THEN
-               apex_debug_message.log_message('no IR id could be found. Check input parameters. -> end');
-               RETURN NULL;
-         END;
-      ELSE
-         v_report_id := p_report_id;
-      END IF;
+      v_report_id := get_ir_report_id(
+          p_app_id      => p_app_id,
+          p_page_id     => p_page_id,
+          p_app_user    => p_app_user,
+          p_session_id  => p_session_id,
+          p_report_id   => p_report_id
+      );
 
       apex_debug_message.log_message('report_id: '||v_report_id);
 
-      /*Return the report query and any addition sort from the Interactive Report*/
-      SELECT z.interactive_report_id,
-             x.report_id,
-             z.sql_query,
-             nvl2(x.sort_column_1, x.sort_column_1
-             || ' '
-             || x.sort_direction_1
-             || nvl2(x.sort_column_2, ', '
-             || x.sort_column_2
-             || ' '
-             || x.sort_direction_2, NULL)
-             || nvl2(x.sort_column_3, ', '
-             || x.sort_column_3
-             || ' '
-             || x.sort_direction_3, NULL)
-             || nvl2(x.sort_column_4, ', '
-             || x.sort_column_4
-             || ' '
-             || x.sort_direction_4, NULL)
-             || nvl2(x.sort_column_5, ', '
-             || x.sort_column_5
-             || ' '
-             || x.sort_direction_5, NULL)
-             || nvl2(x.sort_column_6, ', '
-             || x.sort_column_6
-             || ' '
-             || x.sort_direction_6, NULL)||', rownum ', ' rownum ') sql_sort,
-             x.report_columns
-        INTO lv_ir_bid,
-             lv_ir_sid,
-             lv_sql,
-             lv_sql_sort,
-             lv_rpt_cols
-        FROM /* The following view contains the report original report query*/
-             apex_application_page_ir z,
-             /*The following view provides any column sorting*/
-             apex_application_page_ir_rpt x
-       WHERE x.interactive_report_id = z.interactive_report_id
-         AND x.application_id = p_app_id
-         AND x.report_id = v_report_id
-         AND x.page_id = p_page_id;
-
-      apex_debug_message.log_message('IR base ID: '||lv_ir_bid);
-      apex_debug_message.log_message('IR session ID: '||lv_ir_sid);
+      get_ir_details(
+          p_app_id       => p_app_id,
+          p_page_id      => p_page_id,
+          p_report_id    => v_report_id,
+          o_ir_bid       => lv_ir_bid,
+          o_ir_sid       => lv_ir_sid,
+          o_ir_sql       => lv_sql,
+          o_ir_sql_sort  => lv_sql_sort,
+          o_ir_rpt_cols  => lv_rpt_cols
+      );      
       
       IF p_incl_filters THEN
         /*FILTER TYPES ON COLUMNS ONLY IN THIS LOOP!
@@ -1323,9 +862,7 @@ IS
         apex_debug_message.log_message('All row filters processed');
         apex_debug_message.log_message('conditions aggregated: '||lv_filters);
         apex_debug_message.log_message('* Finished processing row filters *');
-  
-        --dbms_output.put_line('filters: '||lv_filters);
-  
+    
         /*SEARCH TYPES ONLY IN THIS LOOP
           For each Search condition a filter needs to be applied to each column in the query
           date columns excluded
@@ -1393,20 +930,27 @@ IS
   
         apex_debug_message.log_message('All searches parsed');
         apex_debug_message.log_message('searches aggregated: '||lv_searches);
-        apex_debug_message.log_message('* Finishes processing Search conditions');
-        --dbms_output.put_line('searches: ' || lv_searches);
+        apex_debug_message.log_message('* Finished processing Search conditions');
       END IF;
 
-      -- create base sql
-      lv_combined := 'select '||REPLACE(RTRIM(lv_rpt_cols,':'), ':',',')||' from (' || lv_sql || ')'||lv_searches||lv_filters||' ORDER BY '||lv_sql_sort;
+      -- create base sql      
+      IF p_all_columns THEN
+         apex_debug_message.log_message('* Selecting all columns (*)');
+         lv_combined := 'select * from (' || lv_sql || ')';
+      ELSE
+         apex_debug_message.log_message('*  Only selecting selected column');
+         lv_combined := 'select '||REPLACE(RTRIM(lv_rpt_cols,':'), ':',',')||' from (' || lv_sql || ')';
+      END IF;
       
       -- combine the filters and searches into the final sql
       IF p_incl_filters THEN
+         apex_debug_message.log_message('* Appending filters');
          lv_combined := lv_combined||lv_searches||lv_filters;
       END IF;
       
       -- combine with order by
       IF p_incl_order_by THEN
+         apex_debug_message.log_message('* Appending order by clause');
          lv_combined := lv_combined||' ORDER BY '||lv_sql_sort;
       END IF;
 
@@ -1447,4 +991,5 @@ IS
    END get_ir_sql;
    ------------------------------------------------------------------------------------------------
 END apex_ir_pkg;
+
 /

@@ -1,4 +1,11 @@
-CREATE OR REPLACE PACKAGE APEX_IR_PKG
+--------------------------------------------------------
+--  File created - dinsdag-december-18-2012   
+--------------------------------------------------------
+--------------------------------------------------------
+--  DDL for Package APEX_IR_PKG
+--------------------------------------------------------
+
+  CREATE OR REPLACE PACKAGE "ARC"."APEX_IR_PKG" 
 IS
       ------------------------------------------------------------------------------------------------
    /* Parses the sql and checks for the existence of a display and/or
@@ -98,8 +105,7 @@ IS
       p_prev               OUT VARCHAR2, -- previous value
       p_top                OUT VARCHAR2, -- top value: first record
       p_bot                OUT VARCHAR2, -- bottom value: last record
-      p_cur_tot            OUT VARCHAR2, -- current of total: '4 of 132'
-      p_debug              OUT VARCHAR2  -- Returns the final and adjusted executed query
+      p_cur_tot            OUT VARCHAR2  -- current of total: '4 of 132'
    );
    ------------------------------------------------------------------------------------------------
    FUNCTION get_column_ac_values
@@ -110,6 +116,7 @@ IS
       p_value              IN  VARCHAR2, -- the current search value for p_column_id IF NULL THEN ALL
       p_page_id            IN  NUMBER,   -- Page number of the interactive report
       p_report_id          IN  NUMBER,   -- id of the selected IR, this can be null
+      p_app_user           IN  VARCHAR2, -- app user (APP_USER)
       p_use_session_state  IN  BOOLEAN DEFAULT TRUE, -- true for using apex session state bind vars. If False p_binds+vals are to be filled.
       p_binds              IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables
       p_binds_val          IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables VALUES
@@ -137,11 +144,13 @@ IS
       p_app_user           IN  VARCHAR2, -- user (APP_USER)
       p_use_session_state  IN  BOOLEAN DEFAULT TRUE, -- true for using apex session state bind vars. If False p_binds+vals are to be filled.
       p_binds              IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables
-      p_binds_val          IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables VALUES      
-      p_incl_filters       IN  BOOLEAN DEFAULT TRUE, --whether to include applied filters or not      
+      p_binds_val          IN  DBMS_SQL.VARCHAR2_TABLE, -- plsql table with bind variables VALUES
+      p_all_columns        IN  BOOLEAN DEFAULT FALSE, -- select * from ir sql or only selected columns
+      p_incl_filters       IN  BOOLEAN DEFAULT TRUE, --whether to include applied filters or not
       p_incl_order_by      IN  BOOLEAN DEFAULT TRUE  --whether to include the order by or not
    )
    RETURN VARCHAR2;
    ------------------------------------------------------------------------------------------------
 END apex_ir_pkg;
+
 /
