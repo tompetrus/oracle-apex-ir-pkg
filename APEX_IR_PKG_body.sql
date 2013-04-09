@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE BODY APEX_IR_PKG
+create or replace PACKAGE BODY APEX_IR_PKG
 
 IS
    pa_condition_type_filter         CONSTANT VARCHAR2(30) := 'Filter';
@@ -284,13 +284,24 @@ IS
             lv_pref := substr(lv_pref, 1, instr(lv_pref, '_')-1);
             apex_debug_message.log_message('base_report_id: '||lv_pref);
 
-            SELECT report_id
-              INTO lv_report_id
-              FROM apex_application_page_ir_rpt
-             WHERE application_id = p_app_id
-               AND page_id = p_page_id
-               AND base_report_id = lv_pref
-               AND session_id = p_session_id;
+            BEGIN
+               SELECT report_id
+                 INTO lv_report_id
+                 FROM apex_application_page_ir_rpt
+                WHERE application_id = p_app_id
+                  AND page_id = p_page_id
+                  AND base_report_id = lv_pref
+                  AND session_id = p_session_id;
+            EXCEPTION 
+               WHEN no_data_found THEN
+                  apex_debug_message.log_message('No report has been initialized yet. Using indicated default.');
+                  SELECT report_id
+                    INTO lv_report_id
+                    FROM apex_application_page_ir_rpt
+                   WHERE application_id = p_app_id
+                    AND page_id = p_page_id
+                    AND report_id = lv_pref;
+            END;
          EXCEPTION
             WHEN no_data_found THEN
                apex_debug_message.log_message('no IR id could be found. Check input parameters. -> end');
@@ -298,7 +309,8 @@ IS
          END;
       ELSE
          lv_report_id := p_report_id;
-      END IF;
+      END IF;      
+      apex_debug_message.log_message('Report ID: '||lv_report_id);
       apex_debug_message.log_message('-- GET_IR_REPORT_ID END --');
       RETURN lv_report_id;
    END;
@@ -730,6 +742,7 @@ IS
       lv_binds          DBMS_SQL.VARCHAR2_TABLE;
       lv_pref           VARCHAR2(50);
       lv_bind_val       VARCHAR2(200);
+      l_vc              apex_application_global.vc_arr2;
    BEGIN
       apex_debug_message.log_message('-- GET_IR_SQL -- ');
       
@@ -815,14 +828,22 @@ IS
                                                     p_condition_expression2 => cc.condition_expression2);
            ELSIF cc.filter_lov_source = pa_lov_filter_default
            THEN
-              apex_debug_message.log_message('regular column');
+              apex_debug_message.log_message('regular column - operator: '||cc.condition_operator);
               IF cc.condition_type = pa_condition_type_filter THEN
-                 lv_condition := REPLACE(REPLACE(cc.condition_sql, '#APXWS_EXPR2#', ''''|| cc.condition_expression2|| ''''),
-                                         '#APXWS_EXPR#', CASE SUBSTR(cc.condition_operator, 1, 9)
-                                                         WHEN 'is in the' THEN cc.condition_expression
-                                                         ELSE ''''||cc.condition_expression||''''
-                                                         END);
-  
+                 IF cc.condition_operator IN  ('in','not in') THEN
+                    l_vc := apex_util.string_to_table(cc.condition_expression,',');
+                    lv_condition := cc.condition_sql;
+                    FOR z IN 1..l_vc.count LOOP
+                       apex_debug_message.log_message('in, not in: replacing expression '||z||':#APXWS_EXPR_VAL'||z||'# with '||l_vc(z));
+                       lv_condition := REPLACE(lv_condition, '#APXWS_EXPR_VAL'||z||'#', ''''||TRIM(l_vc(z))||'''');
+                    END LOOP;
+                 ELSE
+                    lv_condition := REPLACE(REPLACE(cc.condition_sql, '#APXWS_EXPR2#', ''''|| cc.condition_expression2|| ''''),
+                                            '#APXWS_EXPR#', CASE SUBSTR(cc.condition_operator, 1, 9)
+                                                            WHEN 'is in the' THEN cc.condition_expression
+                                                            ELSE ''''||cc.condition_expression||''''
+                                                            END);
+                 END IF;
   
               ELSIF cc.condition_type = pa_condition_type_search THEN
                  apex_debug_message.log_message('column filter of SEARCH type (column contains)');
@@ -991,5 +1012,3 @@ IS
    END get_ir_sql;
    ------------------------------------------------------------------------------------------------
 END apex_ir_pkg;
-
-/
