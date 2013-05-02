@@ -284,24 +284,25 @@ IS
             lv_pref := substr(lv_pref, 1, instr(lv_pref, '_')-1);
             apex_debug_message.log_message('base_report_id: '||lv_pref);
 
-            BEGIN
+            --I've observed that the same report can get multiple instances in a session
+            --for some reason. Just taking the max of the IDs, since highest id should be
+            --the last activated and active one. 
+            SELECT max(report_id)
+              INTO lv_report_id
+              FROM apex_application_page_ir_rpt
+             WHERE application_id = p_app_id
+               AND page_id = p_page_id
+               AND base_report_id = lv_pref
+               AND session_id = p_session_id;
+            IF lv_report_id IS NULL THEN
+               apex_debug_message.log_message('No report has been initialized yet. Using indicated default.');
                SELECT report_id
                  INTO lv_report_id
                  FROM apex_application_page_ir_rpt
                 WHERE application_id = p_app_id
-                  AND page_id = p_page_id
-                  AND base_report_id = lv_pref
-                  AND session_id = p_session_id;
-            EXCEPTION 
-               WHEN no_data_found THEN
-                  apex_debug_message.log_message('No report has been initialized yet. Using indicated default.');
-                  SELECT report_id
-                    INTO lv_report_id
-                    FROM apex_application_page_ir_rpt
-                   WHERE application_id = p_app_id
-                    AND page_id = p_page_id
-                    AND report_id = lv_pref;
-            END;
+                 AND page_id = p_page_id
+                 AND report_id = lv_pref;
+            END IF;
          EXCEPTION
             WHEN no_data_found THEN
                apex_debug_message.log_message('no IR id could be found. Check input parameters. -> end');
